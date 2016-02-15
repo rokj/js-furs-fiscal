@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Example of fiscal verification of invoices with FURS</title>
+
+    <script src="js/ajax.js"></script>
+    <script src="js/common.js"></script>
+    <script src="js/furs.js"></script>
+    <script src="js/jsrsasign-latest-all-min.js"></script>
+    <script src="js/forge.min.js"></script>
+    <script src="js/jquery-2.1.4.min.js"></script>
+    <script src="js/jwt-decode.min.js"></script>
+
+    <script type="application/javascript">
+        $(window).load(function() {
+            // set this two variables
+            var tax_number = '';
+            var cert_password = '';
+
+            var g = {
+                FURS_TEST_ENDPOINT: 'https://blagajne-test.fu.gov.si:9002',
+                FURS_PRODUCTION_ENDPOINT: 'https://blagajne.fu.gov.si:9003',
+
+                TYPE_MOVABLE_PREMISE_A: 'A',
+                TYPE_MOVABLE_PREMISE_B: 'B',
+                TYPE_MOVABLE_PREMISE_C: 'C',
+
+                NUMBERING_STRUCTURE_CENTRAL: 'C',
+                NUMBERING_STRUCTURE_DEVICE: 'B',
+
+                REGISTER_BUSINESS_UNIT_PATH: 'v1/cash_registers/invoices/register',
+                INVOICE_ISSUE_PATH: 'v1/cash_registers/invoices',
+
+                serial: '',
+                subject_name: '',
+                issuer_name: '',
+
+                p12: null,
+                key: null,
+
+                tax_number: tax_number,
+                cert_password: cert_password
+            };
+
+            var now = new Date();
+            var validity_date = now.getFullYear()-1 + "-" + (now.getMonth()+1) + "-" + now.getDate() + "T" + now.getHours() + ":" + now.getMinutes() + ":" + now.getSeconds() + "Z";
+
+            var premise_args = {
+                "tax_number": g.tax_number,
+                "premise_id": "BP101",
+                "real_estate_cadastral_number": 112,
+                "real_estate_building_number": 11,
+                "real_estate_building_section_number": 1,
+                "street": "Trzaska cesta",
+                "house_number": 24,
+                "house_number_additional": "A",
+                "community": "Ljubljana",
+                "city": "Ljubljana",
+                "postal_code": '1000',
+                "validity_date": validity_date,
+                "software_supplier_tax_number": '20412345',
+                "foreign_software_supplier_name": null,
+                "special_notes": "/"
+            };
+
+            var invoice_args = {
+                "tax_number": g.tax_number,
+                "premise_id": 'BP101',
+                "electronic_device_id": 'B1',
+                "invoice_number": 11,
+                "invoice_amount": 19.15,
+                "issued_date": now,
+                "special_notes": "/",
+                "tax_rates": [
+                    {
+                        "TaxRate": "0.22",
+                        "TaxableAmount": "3",
+                        "TaxAmount": "0.66"
+                    }
+                ]
+            };
+
+            $("#cert-file").change(handleFileSelect);
+
+            function getFile(p12cert) {
+                var reader = new FileReader();
+
+                reader.onload = (function (theFile) {
+                    return function(eve) {
+                        var p12Der = forge.util.decode64(eve.target.result.split(',')[1]);
+                        // get p12 as ASN.1 object
+                        // Not working for one of my p12 files
+                        var p12Asn1 = forge.asn1.fromDer(p12Der);
+
+                        // decrypt p12 using the password 'password'
+                        // TODO: Not working for some reason for p12 and pfx file
+                        g.p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, g.cert_password);
+
+                        // get bags by type
+                        var bags = g.p12.getBags({bagType: forge.pki.oids.certBag});
+                        // bags are key'd by bagType and each bagType key's value
+                        // is an array of matches (in this case, certificate objects)
+                        var cert = bags[forge.pki.oids.certBag][0];
+
+                        g.serial = parseInt(cert["cert"]["serialNumber"], 16);
+
+                        g.issuer_name = cert["cert"]["issuer"];
+                        loadPkcs12(p12Der, g.cert_password);
+
+                        g.subject_name = cert["cert"]["subject"];
+
+                        var FURSBusinessPremise = new FURSBusinessPremiseAPI(g);
+                        var FURSInvoice = new FURSInvoiceAPI(g);
+
+                        FURSBusinessPremise.register_immovable_business_premise(premise_args);
+
+                        var zoi = FURSInvoice.calculate_zoi(invoice_args);
+                        invoice_args["zoi"] = zoi;
+
+                        FURSInvoice.get_invoice_eor(invoice_args);
+                    };
+                })(p12cert);
+
+                reader.readAsDataURL(p12cert);
+            }
+
+            function handleFileSelect(evt) {
+                var files = evt.target.files; // FileList object
+
+                getFile(files[0]);
+            }
+        });
+    </script>
+</head>
+<body>
+    <input id="cert-file" type="file" name="cert" />
+
+    <output id="p12cert"></output>
+</body>
+</html>
